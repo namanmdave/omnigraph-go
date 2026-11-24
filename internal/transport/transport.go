@@ -119,6 +119,12 @@ func New(cfg Config) (*Client, error) {
 				return http.ErrUseLastResponse
 			},
 		}
+	} else if httpClient.CheckRedirect == nil {
+		clone := *httpClient
+		clone.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+		httpClient = &clone
 	}
 
 	contract := cfg.ContractVersion
@@ -340,6 +346,9 @@ func (c *Client) discover(ctx context.Context) error {
 		c.discoveredOK = true
 		_ = resp.Body.Close()
 		return nil
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 
 	var tErr *TransportError

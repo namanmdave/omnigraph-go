@@ -181,3 +181,146 @@ func TestConcurrentDiscovery(t *testing.T) {
 		t.Fatalf("expected exactly 1 discovery call under concurrency, got %d", healthCalls.Load())
 	}
 }
+
+func TestDuplicateContractHeaderRejected(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add(ContractHeader, "0.14")
+		w.Header().Add(ContractHeader, "0.14")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c, err := New(Config{BaseURL: srv.URL, GraphID: "alpha", SkipDiscovery: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out map[string]any
+	err = c.RequestJSON(context.Background(), http.MethodGet, "/schema", RequestOptions{}, &out)
+	var tErr *TransportError
+	if !errors.As(err, &tErr) || tErr.Kind != KindAPIContract {
+		t.Fatalf("expected KindAPIContract for duplicate contract header, got %v", err)
+	}
+}
+
+func TestRedirectsNotFollowedAndNoTokenLeak(t *testing.T) {
+	var targetHits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(ContractHeader, "0.14")
+		if r.URL.Path == "/healthz" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.Redirect(w, r, target.URL+"/leak", http.StatusFound)
+	}))
+	defer srv.Close()
+
+	c, err := New(Config{
+		BaseURL:    srv.URL,
+		Token:      "top-secret",
+		GraphID:    "alpha",
+		HTTPClient: &http.Client{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out map[string]any
+	err = c.RequestJSON(context.Background(), http.MethodGet, "/schema", RequestOptions{}, &out)
+	var tErr *TransportError
+	if !errors.As(err, &tErr) || tErr.Status != http.StatusFound {
+		t.Fatalf("expected unfollowed 302 error, got %v", err)
+	}
+	if targetHits.Load() != 0 {
+		t.Fatalf("redirect target should never be hit, got %d hits", targetHits.Load())
+	}
+}
+
+func TestPublicPathsStripCredentials(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(ContractHeader, "0.14")
+		if r.Header.Get("Authorization") != "" || r.Header.Get(IfActorHeader) != "" {
+			t.Errorf("credentials leaked on public path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer srv.Close()
+
+	c, err := New(Config{BaseURL: srv.URL, Token: "secret", SkipDiscovery: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, p := range []string{"/healthz", "/readyz", "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/alpha"} {
+		var out map[string]any
+		if err := c.RequestJSON(context.Background(), http.MethodGet, p, RequestOptions{IfActor: "alice"}, &out); err != nil {
+			t.Fatalf("path %s failed: %v", p, err)
+		}
+	}
+}
+
+func TestDiscoveryRecoversAfterTransientFailure(t *testing.T) {
+	var healthCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(ContractHeader, "0.14")
+		if r.URL.Path == "/healthz" {
+			if healthCalls.Add(1) == 1 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		_, _ = w.Write([]byte(`{"schema_source":"type A { id: String }"}`))
+	}))
+	defer srv.Close()
+
+	c, err := New(Config{BaseURL: srv.URL, GraphID: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out map[string]any
+	if err := c.RequestJSON(context.Background(), http.MethodGet, "/schema", RequestOptions{}, &out); err == nil {
+		t.Fatal("expected first call to fail during transient discovery failure")
+	}
+	if err := c.RequestJSON(context.Background(), http.MethodGet, "/schema", RequestOptions{}, &out); err != nil {
+		t.Fatalf("expected recovery on second call, got %v", err)
+	}
+}
+
+func TestPathEscaping(t *testing.T) {
+	var seenPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(ContractHeader, "0.14")
+		if r.URL.Path == "/healthz" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		seenPath = r.URL.RawPath
+		if seenPath == "" {
+			seenPath = r.URL.Path
+		}
+		_, _ = w.Write([]byte(`{"schema_source":"ok"}`))
+	}))
+	defer srv.Close()
+
+	c, err := New(Config{BaseURL: srv.URL, GraphID: "team/alpha 1#x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out map[string]any
+	if err := c.RequestJSON(context.Background(), http.MethodGet, "/schema", RequestOptions{}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if seenPath != "/graphs/team%2Falpha%201%23x/schema" {
+		t.Fatalf("unexpected escaped path: %q", seenPath)
+	}
+}

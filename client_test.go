@@ -2,7 +2,9 @@ package omnigraph_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -129,5 +131,87 @@ func TestBlobsAndResources(t *testing.T) {
 	sc, err := client.Schema().Show(context.Background())
 	if err != nil || !strings.Contains(sc.SchemaSource, "Person") {
 		t.Fatalf("unexpected schema: %+v, err=%v", sc, err)
+	}
+}
+
+func TestOpaqueUserKeysPreserved(t *testing.T) {
+	var seenParams map[string]any
+	srv := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		_ = json.Unmarshal(raw, &body)
+		seenParams, _ = body["params"].(map[string]any)
+		_, _ = w.Write([]byte(`{"query_name":"q","row_count":1,"rows":[{"user_Name":"Alice","camelKey":42}],"target":{"branch":"main"}}`))
+	})
+	defer srv.Close()
+
+	client, err := omnigraph.NewClient(srv.URL, omnigraph.WithGraphID("alpha"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := client.Query(context.Background(), omnigraph.QueryInput{
+		Query:  "query q($userId: String) { match { $p: Person } return { $p.name } }",
+		Params: map[string]any{"userId": "u-1", "snake_param": true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seenParams["userId"] != "u-1" || seenParams["snake_param"] != true {
+		t.Fatalf("params keys were altered: %+v", seenParams)
+	}
+	rows := res.Rows.([]any)
+	row := rows[0].(map[string]any)
+	if row["user_Name"] != "Alice" || row["camelKey"] != float64(42) {
+		t.Fatalf("response row keys were altered: %+v", row)
+	}
+}
+
+func TestErrorMappingAndContextCancellation(t *testing.T) {
+	cases := []struct {
+		status   int
+		code     string
+		sentinel error
+	}{
+		{http.StatusBadRequest, "bad_request", omnigraph.ErrBadRequest},
+		{http.StatusUnauthorized, "unauthorized", omnigraph.ErrUnauthorized},
+		{http.StatusForbidden, "forbidden", omnigraph.ErrForbidden},
+		{http.StatusConflict, "conflict", omnigraph.ErrConflict},
+		{http.StatusGone, "change_feed_gap", omnigraph.ErrGone},
+		{http.StatusTooManyRequests, "rate_limited", omnigraph.ErrTooManyRequests},
+		{http.StatusServiceUnavailable, "graph_unavailable", omnigraph.ErrGraphUnavailable},
+		{http.StatusInternalServerError, "internal", omnigraph.ErrInternalServer},
+	}
+
+	for _, tc := range cases {
+		srv := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Request-Id", "req-99")
+			w.Header().Set("Retry-After", "5")
+			w.WriteHeader(tc.status)
+			_, _ = w.Write([]byte(`{"code":"` + tc.code + `","error":"boom","disposition":{"effects":"none","action":"retry"}}`))
+		})
+		client, err := omnigraph.NewClient(srv.URL, omnigraph.WithGraphID("alpha"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = client.Schema().Show(context.Background())
+		srv.Close()
+
+		if !errors.Is(err, tc.sentinel) {
+			t.Fatalf("status %d (%s): expected %v, got %v", tc.status, tc.code, tc.sentinel, err)
+		}
+		var apiErr *omnigraph.Error
+		if !errors.As(err, &apiErr) || apiErr.RequestID != "req-99" || apiErr.RetryAfter != "5" {
+			t.Fatalf("expected RequestID and RetryAfter on Error, got %+v", err)
+		}
+	}
+
+	srv := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {})
+	defer srv.Close()
+	client, _ := omnigraph.NewClient(srv.URL, omnigraph.WithGraphID("alpha"))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := client.Schema().Show(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }
