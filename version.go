@@ -1,5 +1,7 @@
 package omnigraph
 
+//go:generate go run ./cmd/sync-spec
+
 const (
 	ServerVersion          = "0.14.0"
 	HTTPAPIContract        = "0.14"
