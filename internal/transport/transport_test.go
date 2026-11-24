@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -142,5 +143,41 @@ func TestOutcomeUnknownOnWriteDisposition(t *testing.T) {
 	err = c.RequestJSON(context.Background(), http.MethodPost, "/branches", RequestOptions{Body: map[string]any{"name": "dev"}}, &out)
 	if !errors.As(err, &tErr) || !tErr.OutcomeUnknown {
 		t.Fatalf("expected OutcomeUnknown=true when write fails without disposition, got %+v", err)
+	}
+}
+
+func TestConcurrentDiscovery(t *testing.T) {
+	var healthCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(ContractHeader, "0.14")
+		if r.URL.Path == "/healthz" {
+			healthCalls.Add(1)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	c, err := New(Config{BaseURL: srv.URL, GraphID: "alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var out map[string]any
+			if err := c.RequestJSON(context.Background(), http.MethodGet, "/schema", RequestOptions{}, &out); err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if healthCalls.Load() != 1 {
+		t.Fatalf("expected exactly 1 discovery call under concurrency, got %d", healthCalls.Load())
 	}
 }

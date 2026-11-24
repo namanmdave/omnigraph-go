@@ -217,6 +217,11 @@ func (c *Client) Send(ctx context.Context, method, path string, opts RequestOpti
 		}
 	}
 
+	return c.sendOnce(ctx, method, path, opts)
+}
+
+func (c *Client) sendOnce(ctx context.Context, method, path string, opts RequestOptions) (*http.Response, error) {
+
 	fullURL, err := c.buildURL(path, opts.Query)
 	if err != nil {
 		return nil, &TransportError{
@@ -322,31 +327,20 @@ func (c *Client) Send(ctx context.Context, method, path string, opts RequestOpti
 
 func (c *Client) discover(ctx context.Context) error {
 	c.discoverMu.Lock()
+	defer c.discoverMu.Unlock()
 	if c.discoveredOK {
-		c.discoverMu.Unlock()
 		return nil
 	}
-	c.discoverMu.Unlock()
 
 	discoverCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	savedSkip := c.skipDiscovery
-	c.discoverMu.Lock()
-	c.skipDiscovery = true
-	c.discoverMu.Unlock()
-
-	resp, err := c.Send(discoverCtx, http.MethodHead, "/healthz", RequestOptions{})
-
-	c.discoverMu.Lock()
-	c.skipDiscovery = savedSkip
+	resp, err := c.sendOnce(discoverCtx, http.MethodHead, "/healthz", RequestOptions{})
 	if err == nil {
 		c.discoveredOK = true
 		_ = resp.Body.Close()
-		c.discoverMu.Unlock()
 		return nil
 	}
-	c.discoverMu.Unlock()
 
 	var tErr *TransportError
 	status := 0

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/namanmdave/omnigraph-go/internal/transport"
 )
@@ -62,8 +63,8 @@ func (c *Client) Readiness(ctx context.Context) (*ReadinessOutput, error) {
 
 func (c *Client) OAuthProtectedResourceMetadata(ctx context.Context, resourcePath string) (map[string]any, error) {
 	path := "/.well-known/oauth-protected-resource"
-	if resourcePath != "" {
-		path += "/" + resourcePath
+	if trimmed := strings.TrimPrefix(resourcePath, "/"); trimmed != "" {
+		path += "/" + trimmed
 	}
 	var out map[string]any
 	if err := c.doJSON(ctx, http.MethodGet, path, transport.RequestOptions{}, &out); err != nil {
