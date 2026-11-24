@@ -117,14 +117,14 @@ type MutationInput struct {
 }
 
 type ChangeOutput struct {
-	QueryName     string  `json:"query_name"`
-	Branch        string  `json:"branch"`
-	AffectedNodes int     `json:"affected_nodes"`
-	AffectedEdges int     `json:"affected_edges"`
-	ActorID       *string `json:"actor_id,omitempty"`
-	Commit        any     `json:"commit"`
-	Executed      any     `json:"executed,omitempty"`
-	Outcome       any     `json:"outcome,omitempty"`
+	QueryName     string        `json:"query_name"`
+	Branch        string        `json:"branch"`
+	AffectedNodes int           `json:"affected_nodes"`
+	AffectedEdges int           `json:"affected_edges"`
+	ActorID       *string       `json:"actor_id,omitempty"`
+	Commit        *CommitOutput `json:"commit"`
+	Executed      any           `json:"executed,omitempty"`
+	Outcome       any           `json:"outcome,omitempty"`
 }
 
 type IngestInput struct {
@@ -206,12 +206,17 @@ type GraphListOutput struct {
 	Graphs []GraphInfo `json:"graphs"`
 }
 
+type GraphDiscoveryEntry struct {
+	GraphID     string `json:"graph_id"`
+	DisplayName string `json:"display_name"`
+}
+
 type GraphDiscoveryOutput struct {
-	Graphs []any `json:"graphs"`
+	Graphs []GraphDiscoveryEntry `json:"graphs"`
 }
 
 type BranchListOutput struct {
-	Branches []any `json:"branches"`
+	Branches []string `json:"branches"`
 }
 
 type BranchCreateInput struct {
@@ -244,14 +249,14 @@ type BranchMergeInput struct {
 }
 
 type BranchMergeOutput struct {
-	Source                 string  `json:"source"`
-	Target                 string  `json:"target"`
-	Outcome                string  `json:"outcome"`
-	Commit                 any     `json:"commit"`
-	DryRun                 bool    `json:"dry_run,omitempty"`
-	BranchDeleted          *bool   `json:"branch_deleted,omitempty"`
-	BranchDeleteError      any     `json:"branch_delete_error_details,omitempty"`
-	ActorID                *string `json:"actor_id,omitempty"`
+	Source            string        `json:"source"`
+	Target            string        `json:"target"`
+	Outcome           string        `json:"outcome"`
+	Commit            *CommitOutput `json:"commit"`
+	DryRun            bool          `json:"dry_run,omitempty"`
+	BranchDeleted     *bool         `json:"branch_deleted,omitempty"`
+	BranchDeleteError any           `json:"branch_delete_error_details,omitempty"`
+	ActorID           *string       `json:"actor_id,omitempty"`
 }
 
 type BranchDiffInput struct {
@@ -343,8 +348,25 @@ type SchemaOutput struct {
 	SystemColumns   any     `json:"system_columns,omitempty"`
 }
 
+type ParamDescriptor struct {
+	Name      string `json:"name"`
+	Kind      string `json:"kind"`
+	Nullable  bool   `json:"nullable"`
+	ItemKind  any    `json:"item_kind,omitempty"`
+	VectorDim *int   `json:"vector_dim,omitempty"`
+}
+
+type QueryCatalogEntry struct {
+	Name        string            `json:"name"`
+	ToolName    string            `json:"tool_name"`
+	Mutation    bool              `json:"mutation"`
+	Description *string           `json:"description,omitempty"`
+	Instruction *string           `json:"instruction,omitempty"`
+	Params      []ParamDescriptor `json:"params"`
+}
+
 type QueriesCatalogOutput struct {
-	Queries []any `json:"queries"`
+	Queries []QueryCatalogEntry `json:"queries"`
 }
 
 type InvokeQueryInput struct {

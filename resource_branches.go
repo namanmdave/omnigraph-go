@@ -57,6 +57,17 @@ func (r *BranchesResource) Merge(ctx context.Context, in BranchMergeInput, opts 
 	}, &out); err != nil {
 		return nil, err
 	}
+	if !validMergeReceipt(&out, in) {
+		return nil, &Error{
+			Status:            http.StatusOK,
+			Code:              "api_contract_mismatch",
+			Message:           "invalid merge receipt from server; reconcile before retrying",
+			Method:            http.MethodPost,
+			RequestDispatched: true,
+			OutcomeUnknown:    true,
+			Err:               ErrAPIContract,
+		}
+	}
 	return &out, nil
 }
 

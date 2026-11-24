@@ -63,8 +63,20 @@ func (c *Client) Readiness(ctx context.Context) (*ReadinessOutput, error) {
 
 func (c *Client) OAuthProtectedResourceMetadata(ctx context.Context, resourcePath string) (map[string]any, error) {
 	path := "/.well-known/oauth-protected-resource"
-	if trimmed := strings.TrimPrefix(resourcePath, "/"); trimmed != "" {
-		path += "/" + trimmed
+	if trimmed := strings.Trim(resourcePath, "/"); trimmed != "" {
+		segments := strings.Split(trimmed, "/")
+		for i, seg := range segments {
+			if seg == "" || seg == "." || seg == ".." {
+				return nil, &Error{
+					Code:    "configuration_error",
+					Message: "invalid resourcePath segment",
+					Method:  http.MethodGet,
+					Err:     ErrConfiguration,
+				}
+			}
+			segments[i] = url.PathEscape(seg)
+		}
+		path += "/" + strings.Join(segments, "/")
 	}
 	var out map[string]any
 	if err := c.doJSON(ctx, http.MethodGet, path, transport.RequestOptions{}, &out); err != nil {
@@ -128,6 +140,17 @@ func (c *Client) Mutate(ctx context.Context, in MutationInput, opts ...Condition
 		IfActor: firstCondIfActor(opts),
 	}, &out); err != nil {
 		return nil, err
+	}
+	if !validMutationReceipt(&out) {
+		return nil, &Error{
+			Status:            http.StatusOK,
+			Code:              "api_contract_mismatch",
+			Message:           "invalid mutation receipt from server; reconcile before retrying",
+			Method:            http.MethodPost,
+			RequestDispatched: true,
+			OutcomeUnknown:    true,
+			Err:               ErrAPIContract,
+		}
 	}
 	return &out, nil
 }

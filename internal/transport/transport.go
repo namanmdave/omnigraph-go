@@ -16,8 +16,10 @@ import (
 )
 
 const (
-	ContractHeader = "Omnigraph-Http-Api"
-	IfActorHeader  = "Omnigraph-If-Actor"
+	ContractHeader    = "Omnigraph-Http-Api"
+	IfActorHeader     = "Omnigraph-If-Actor"
+	maxJSONBodyBytes  = 64 << 20
+	maxErrorBodyBytes = 1 << 20
 )
 
 type ErrorKind int
@@ -169,7 +171,7 @@ func (c *Client) RequestJSON(ctx context.Context, method, path string, opts Requ
 		return nil
 	}
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := readLimited(resp.Body, maxJSONBodyBytes)
 	if err != nil || len(bytes.TrimSpace(raw)) == 0 {
 		return &TransportError{
 			Kind:              KindNetwork,
@@ -276,11 +278,16 @@ func (c *Client) sendOnce(ctx context.Context, method, path string, opts Request
 		}
 	}
 	req.Header.Set(ContractHeader, c.contractVersion)
-	if opts.IfActor != "" && !isPublicPath(path) {
-		req.Header.Set(IfActorHeader, opts.IfActor)
-	}
-	if c.token != "" && !isPublicPath(path) {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if isPublicPath(path) {
+		req.Header.Del("Authorization")
+		req.Header.Del(IfActorHeader)
+	} else {
+		if opts.IfActor != "" {
+			req.Header.Set(IfActorHeader, opts.IfActor)
+		}
+		if c.token != "" {
+			req.Header.Set("Authorization", "Bearer "+c.token)
+		}
 	}
 	if req.Header.Get("Accept") == "" {
 		req.Header.Set("Accept", "application/json, application/x-ndjson")
@@ -323,7 +330,7 @@ func (c *Client) sendOnce(ctx context.Context, method, path string, opts Request
 	}
 
 	if (resp.StatusCode < 200 || resp.StatusCode >= 300) && !slices.Contains(opts.AcceptedStatuses, resp.StatusCode) {
-		raw, _ := io.ReadAll(resp.Body)
+		raw, _ := readLimited(resp.Body, maxErrorBodyBytes)
 		_ = resp.Body.Close()
 		return nil, parseHTTPError(method, fullURL, resp, raw, canWrite(method, path))
 	}
@@ -391,6 +398,17 @@ func (c *Client) buildURL(path string, query url.Values) (string, error) {
 		u.RawQuery = q.Encode()
 	}
 	return u.String(), nil
+}
+
+func readLimited(r io.Reader, limit int64) ([]byte, error) {
+	raw, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > limit {
+		return nil, fmt.Errorf("response body exceeds %d bytes", limit)
+	}
+	return raw, nil
 }
 
 func isPublicPath(path string) bool {

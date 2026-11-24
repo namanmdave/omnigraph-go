@@ -38,7 +38,7 @@ func TestClientGraphScopingAndQueries(t *testing.T) {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			_, _ = w.Write([]byte(`{"query_name":"add","branch":"main","affected_nodes":1,"affected_edges":0,"commit":{"graph_commit_id":"c124"}}`))
+			_, _ = w.Write([]byte(`{"query_name":"add","branch":"main","affected_nodes":1,"affected_edges":0,"commit":{"graph_commit_id":"c124","kind":"published","created_at":1,"graph_manifest_version":1}}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"code":"not_found","error":"missing","disposition":{"effects":"none","action":"fail"}}`))
@@ -213,5 +213,39 @@ func TestErrorMappingAndContextCancellation(t *testing.T) {
 	cancel()
 	if _, err := client.Schema().Show(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestReceiptValidationAndResourcePathSafety(t *testing.T) {
+	srv := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/graphs/alpha/mutate":
+			_, _ = w.Write([]byte(`{"query_name":"m","branch":"main","affected_nodes":1,"affected_edges":0,"commit":{"graph_commit_id":""}}`))
+		case "/graphs/alpha/branches/merge":
+			_, _ = w.Write([]byte(`{"source":"feat","target":"main","outcome":"merged","commit":{"graph_commit_id":"c2","kind":"published","created_at":1,"graph_manifest_version":2}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	defer srv.Close()
+
+	client, err := omnigraph.NewClient(srv.URL, omnigraph.WithGraphID("alpha"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = client.Mutate(context.Background(), omnigraph.MutationInput{Query: "m"})
+	var apiErr *omnigraph.Error
+	if !errors.Is(err, omnigraph.ErrAPIContract) || !errors.As(err, &apiErr) || !apiErr.OutcomeUnknown {
+		t.Fatalf("expected ErrAPIContract with OutcomeUnknown on bad mutation receipt, got %v", err)
+	}
+
+	_, err = client.Branches().Merge(context.Background(), omnigraph.BranchMergeInput{Source: "feat"})
+	if !errors.Is(err, omnigraph.ErrAPIContract) {
+		t.Fatalf("expected ErrAPIContract on incomplete merge receipt, got %v", err)
+	}
+
+	if _, err := client.OAuthProtectedResourceMetadata(context.Background(), "../secret"); !errors.Is(err, omnigraph.ErrConfiguration) {
+		t.Fatalf("expected ErrConfiguration on traversal resourcePath, got %v", err)
 	}
 }

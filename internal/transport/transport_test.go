@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -322,5 +323,15 @@ func TestPathEscaping(t *testing.T) {
 	}
 	if seenPath != "/graphs/team%2Falpha%201%23x/schema" {
 		t.Fatalf("unexpected escaped path: %q", seenPath)
+	}
+}
+
+func TestReadLimitedRejectsOversizedBody(t *testing.T) {
+	if _, err := readLimited(strings.NewReader("123456"), 5); err == nil {
+		t.Fatal("expected error when body exceeds limit")
+	}
+	got, err := readLimited(strings.NewReader("12345"), 5)
+	if err != nil || string(got) != "12345" {
+		t.Fatalf("unexpected readLimited result: %q, err=%v", got, err)
 	}
 }
