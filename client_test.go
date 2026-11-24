@@ -56,7 +56,7 @@ func TestClientGraphScopingAndQueries(t *testing.T) {
 
 	alpha := client.Graph("alpha")
 	res, err := alpha.Query(context.Background(), omnigraph.QueryInput{
-		Query:  "query find { match { $p: Person } return { $p.name } }",
+		Query:  "query find() { match { $p: Person } return { $p.name } }",
 		Branch: "main",
 	})
 	if err != nil || res.RowCount != 1 {

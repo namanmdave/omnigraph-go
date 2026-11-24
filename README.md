@@ -21,7 +21,7 @@ if err != nil {
 }
 
 res, err := client.Query(ctx, omnigraph.QueryInput{
-	Query:  "query find { match { $p: Person } return { $p.name } }",
+	Query:  "query find() { match { $p: Person } return { $p.name } }",
 	Branch: "main",
 })
 ```
